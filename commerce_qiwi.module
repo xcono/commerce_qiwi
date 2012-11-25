@@ -1,0 +1,241 @@
+<?php
+/**
+ * @file
+ * Provides an Qiwi Wallet payment method for Drupal Commerce for testing and
+ *   development.
+ */
+
+module_load_include('inc', 'commerce_qiwi', 'includes/commerce_qiwi.admin');
+module_load_include('inc', 'commerce_qiwi', 'includes/commerce_qiwi.lib');
+/**
+ * Implements hook_commerce_payment_method_info().
+ */
+function commerce_qiwi_commerce_payment_method_info() {
+  $payment_methods = array();
+
+  $payment_methods['commerce_qiwi'] = array(
+    'base' => 'commerce_qiwi',
+    'title' => t('Qiwi Wallet'),
+    'short_title' => t('Qiwi'),
+    'display_title' => t('Qiwi'),
+    'description' => t('Integrates Qiwi Wallet Merchant'),
+    'terminal' => FALSE,
+    'offsite' => TRUE,
+    'active' => TRUE,
+  );
+  return $payment_methods;
+}
+
+/**
+ * Payment method callback; generation callback for the payment submission form.
+ *
+ * @param $payment_method
+ *   An array of the current settings.
+ * @param $pane_values
+ *   The current values of the pane.
+ * @param $checkout_pane
+ *   The checkout pane array.
+ * @param $order
+ *   The order object.
+ *
+ * @return
+ *   A form snippet for the checkout pane.
+ */
+function commerce_qiwi_submit_form($payment_method, $pane_values, $checkout_pane, $order) {
+  $form = array();
+  $sitename = variable_get('site_name', 'eStore');
+  $description = t('!sitename. Transaction !ID.', array('!sitename' => $sitename, '!ID' => $order->order_id));
+
+  $form['description'] = array(
+    '#markup' => '<div class="description">' . t('Qiwi Wallet - Organization of the electronic payments receiving.') . '</div>',
+  );
+  return $form;
+}
+
+/**
+ * Payment method callback: submit form submission.
+ */
+function commerce_qiwi_submit_form_submit($payment_method, $pane_form, $pane_values, $order, $charge) {
+  $order->data['commerce_qiwi'] = $pane_values;
+}
+
+/**
+ * Payment method callback: redirect form.
+ */
+function commerce_qiwi_redirect_form($form, &$form_state, $order, $payment_method) {
+  return commerce_qiwi_build_redirect_form($form, $form_state, $order, $payment_method['settings']);
+}
+
+/**
+ * Payment method callback; generation callback for the payment redirect form.
+ */
+function commerce_qiwi_build_redirect_form($form, &$form_state, $order, $settings) {
+
+  $sitename = variable_get('site_name', 'eStore');
+  $description = t('!sitename. Transaction !ID.', array('!sitename' => $sitename, '!ID' => $order->order_id));
+  
+  $form['to'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Phone'),
+    '#description' => t('Enter you phone number without country prefix. For example: 926*******'),
+    '#default_value' => '',
+    '#required' => TRUE,
+  );
+
+  //Hidden elements
+
+  $form['txn_id'] = array(
+    '#type' => 'hidden',
+    '#value' => $order->order_id,
+  );
+
+  $form['from'] = array(
+    '#type' => 'hidden',
+    '#value' => commerce_qiwi_get_settings('merchant_id'),
+  );
+
+  $form['summ'] = array(
+    '#type' => 'hidden',
+    '#value' => commerce_qiwi_get_order_amount($order->order_id),
+  );
+
+  $form['com'] = array(
+    '#type' => 'hidden',
+    '#default_value' => $description,
+  );
+
+  $form['check_agt'] = array(
+    '#type' => 'hidden',
+    '#default_value' => 'false',
+  );
+
+  $form['currency'] = array(
+    '#type' => 'hidden',
+    '#default_value' => commerce_qiwi_get_order_currency($order->order_id),
+  );
+
+  $form['#action'] = commerce_qiwi_get_settings('url');
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Pay via Qiwi'),
+  );
+
+  return $form;
+}
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_qiwi_menu() {
+
+  $items = array();
+
+  $items['qiwi/results'] = array(
+    'title' => 'Payment received successfully',
+    'page callback' => 'commerce_qiwi_results',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['qiwi/done'] = array(
+    'title' => 'Qiwi Server',
+    'page callback' => 'commerce_qiwi_done',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['qiwi/fail'] = array(
+    'title' => 'Unsuccessful payment',
+    'page callback' => 'commerce_qiwi_fail',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+/**
+ * Done page callback handler.
+ */
+function commerce_qiwi_results() {
+  if (isset($_GET['order'])) {
+    $order_number = $_GET['order'];
+    watchdog('commerce_qiwi', 'Result order @order.', array('@order' => $order_number), WATCHDOG_INFO);
+    if ($order = commerce_order_load($order_number)) {
+      drupal_goto('checkout/' . $order->order_id . '/payment/return/' . $order->data['payment_redirect_key']);
+    }
+    else {
+      drupal_not_found();
+    }
+  }
+}
+/**
+ * Done page callback handler.
+ */
+function commerce_qiwi_done() {
+
+  $request = array();
+  $reply = 1;
+  $merchant_id = commerce_qiwi_get_settings('merchant_id');
+  $password = commerce_qiwi_get_settings('password');
+  $xml = drupal_get_path('module', 'commerce_qiwi') . '/includes/xml';
+  $input = file_get_contents('php://input');
+
+  //parse vars to request array
+  $sig_login = array('/<login>(.*)?<\/login>/', '/<password>(.*)?<\/password>/');
+  $sig_status = array('/<txn>(.*)?<\/txn>/', '/<status>(.*)?<\/status>/');
+
+  preg_match($sig_login[0], $input, $request['login']);
+  preg_match($sig_login[1], $input, $request['pass']);
+
+  preg_match($sig_status[0], $input, $request['order']);
+  preg_match($sig_status[1], $input, $request['status']);
+
+
+  $hash_string = md5($request['order'][1] . drupal_strtoupper(md5($password)));
+  $hash = drupal_strtoupper($hash_string);
+
+  // check login and password
+  if ($merchant_id == $request['login'][1] && $hash == $request['pass'][1]) {
+    // status 60 means successfull transaction
+    if ($request['status'][1] == 60) {
+      $reply = 0;
+      commerce_qiwi_transaction($request['order'][1], COMMERCE_PAYMENT_STATUS_SUCCESS);
+      watchdog('commerce_qiwi', 'Order @order paid successfully.', array('@order' => $request['order'][1]), WATCHDOG_INFO);
+    }
+    // status more than 100 means failed transaction
+    elseif ($request['status'][1] > 100) {
+      commerce_qiwi_transaction($request['order'][1], COMMERCE_PAYMENT_STATUS_FAILURE);
+      watchdog('commerce_qiwi', 'Order @order paid failed.', array('@order' => $request['order'][1]), WATCHDOG_WARNING);
+    }
+    // status between 50 and 60 means pending transaction
+    elseif ($request['status'][1] < 60 && $request['status'][1] >= 50) {
+      commerce_qiwi_transaction($request['order'][1], COMMERCE_PAYMENT_STATUS_PENDING);
+      watchdog('commerce_qiwi', 'Order @order payment in process.', array('@order' => $request['order'][1]), WATCHDOG_INFO);
+    }
+  }
+  else {
+    $reply = 150;
+    watchdog('commerce_qiwi', 'Order @order invalid login and password.', array('@order' => $request['order'][1]), WATCHDOG_WARNING);
+  }
+
+  //Create reply to Qiwi Client
+  $file = fopen($xml, 'r');
+  $text = fread($file, filesize($xml));
+  fclose($file);
+  $text = str_replace('status', $reply , $text);
+  header('content-type: text/xml; charset=UTF-8');
+  echo $text;
+}
+
+/**
+ * Fail page callback handler.
+ */
+function commerce_qiwi_fail() {
+  $form = array();
+  $form['description'] = array(
+    '#markup' => '<div class="description">' . t('Payment failed.') . '</div>',
+  );
+  return $form;
+}
