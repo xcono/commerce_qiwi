@@ -1,4 +1,5 @@
 <?php
+
 /**
  * @file
  * Provide admin form for commerce_qiwi payment module

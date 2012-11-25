@@ -1,4 +1,5 @@
 <?php
+
 /**
  * @file
  * Provides an Qiwi Wallet payment method for Drupal Commerce for testing and

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * @file
  * Provide helper function for commerce_qiwi payment module
