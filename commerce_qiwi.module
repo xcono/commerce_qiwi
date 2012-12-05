@@ -55,10 +55,13 @@ function commerce_qiwi_submit_form($payment_method, $pane_values, $checkout_pane
 
 /**
  * Payment method callback: submit form submission.
+ * Doesn't working with Commerce 1.3 (http://drupal.org/node/1392044#comment-5901710)
  */
+/*
 function commerce_qiwi_submit_form_submit($payment_method, $pane_form, $pane_values, $order, $charge) {
   $order->data['commerce_qiwi'] = $pane_values;
 }
+*/
 
 /**
  * Payment method callback: redirect form.
